@@ -1,0 +1,22 @@
+# 构建中间产物
+src/obj/
+src/bin/
+src/obj48/
+src/bin48/
+src/pkgs/
+src/*.log
+
+# 发布产物（Release 页下载即可，仓库不存大文件）
+publish/
+publish_a/
+release/*.exe
+release/*.zip
+
+# 运行时数据（绿色便携目录）
+_data/
+*.tmp
+
+# 杂项
+probe/
+*.png
+!docs/*.png

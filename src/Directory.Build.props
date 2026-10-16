@@ -1,0 +1,12 @@
+<Project>
+  <!-- obj/bin 隔离：net48 轻量版项目用独立 obj48/bin48，防两项目互踩 project.assets.json -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'ModelMonitor48'">
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)obj48\</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(MSBuildThisFileDirectory)obj48\</MSBuildProjectExtensionsPath>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)bin48\</BaseOutputPath>
+  </PropertyGroup>
+  <!-- 两项目都把中间/输出目录从默认 glob 排除（否则会把对方 obj 里的生成 .cs 编进来） -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin\**;obj\**;bin48\**;obj48\**;publish\**;publish_a\**;pkgs\**</DefaultItemExcludes>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本机模型监控</title>
+<link rel="stylesheet" href="monitor.css">
+</head>
+<body>
+<div id="frame">
+  <!-- L0 全局态：透明标题条（无自身底色） -->
+  <header id="titlebar">
+    <span class="tb-name">本机模型监控</span>
+    <span id="pill" class="pill">…</span>
+    <span id="refresh" class="tb-time">–</span>
+    <span class="tb-spacer"></span>
+    <button id="btn-min" class="wbtn" title="最小化到托盘">
+      <svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg>
+    </button>
+    <button id="btn-ghost" class="wbtn" title="鼠标穿透">
+      <svg viewBox="0 0 16 16"><path d="M8 2.5c2.5 0 4.5 2 4.5 4.5 0 1.2-.4 2-.4 3.2L11 12l-1.2-1.2L8.6 12 7.2 10.8 5.8 12 4.4 10.2h-.5c0-1.2-.4-2-.4-3.2C3.5 4.5 5.5 2.5 8 2.5z"/></svg>
+    </button>
+    <button id="btn-dock" class="wbtn" title="贴边自动隐藏">
+      <svg viewBox="0 0 16 16"><path d="M2 2h12v12H2z" fill="none"/><path d="M2 2v12" stroke-width="2.4"/><path d="M7 5.5L9.5 8 7 10.5" fill="none"/></svg>
+    </button>
+    <button id="btn-pin" class="wbtn" title="置于顶层">
+      <svg viewBox="0 0 16 16" class="pin-outline"><path d="M9.5 2l4.5 4.5-2 2-.6-.6-3.3 3.3.4 2.3-1.4 1.4-3-3-3.6 3.6-.7-.7 3.6-3.6-3-3 1.4-1.4 2.3.4 3.3-3.3-.6-.6z"/></svg>
+    </button>
+  </header>
+
+  <main id="content">
+    <!-- L1 GPU 资源层 -->
+    <section id="gpu-zone" class="zone"></section>
+    <!-- L2 服务层 -->
+    <section id="svc-zone" class="zone"></section>
+  </main>
+
+  <!-- 右键设置菜单（与托盘同一数据源） -->
+  <div id="ctxmenu" class="ctx hidden"></div>
+  <!-- 关于小窗 -->
+  <div id="about" class="about hidden"></div>
+  <!-- 恢复默认确认条 -->
+  <div id="confirm" class="confirm hidden"></div>
+  <!-- 间隔反馈 -->
+  <div id="flash" class="flash hidden"></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

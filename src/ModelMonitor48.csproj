@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- 轻量版：.NET Framework 4.8 —— Win10/11 系统自带运行时（产物仅几 MB），Win7 SP1 装 4.8 离线包亦可运行。
+       语法用最新 Roslyn（范围运算符/可空注解/using 声明全可用），缺失的运行时 API 由 Compat.cs + NuGet 补齐。 -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <AssemblyName>ysk_model_monitor</AssemblyName>
+    <RootNamespace>ModelMonitor</RootNamespace>
+    <Version>1.0.2</Version>
+    <Product>本机模型监控悬浮窗</Product>
+    <DebugType>none</DebugType>
+    <BaseIntermediateOutputPath>obj48\</BaseIntermediateOutputPath>
+    <BaseOutputPath>bin48\</BaseOutputPath>
+    <GenerateProgramFile>false</GenerateProgramFile>
+    <StartupObject>ModelMonitor.Program</StartupObject>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <NoWarn>$(NoWarn);CS0618;WFO0003;CS8981</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Management" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Net.Http.WebRequest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="wwwroot\**" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="app.ico" />
+  </ItemGroup>
+
+</Project>
