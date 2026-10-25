@@ -294,6 +294,14 @@ public sealed class Monitor
                     break;
                 case "comfyui":
                     data["health"] = TrimComfy(await GetJson(def.base_url + def.health_path, to));
+                    try { data["queue"] = TrimComfyQueue(await GetJson(def.base_url + "/queue", to)); } catch { }
+                    try
+                    {
+                        JsonNode? hist;
+                        try { hist = await GetJson(def.base_url + "/history?max=12", to); }
+                        catch { hist = await GetJson(def.base_url + "/history", to); }   // 老版本不认 max 参数
+                        data["history"] = TrimComfyHistory(hist);
+                    } catch { }
                     break;
                 default: // tts / asr / generic
                     data["health"] = await GetJson(def.base_url + def.health_path, to);
@@ -377,6 +385,94 @@ public sealed class Monitor
             o["devices"] = arr;
         }
         return o;
+    }
+
+    /// <summary>ComfyUI /queue → {running, pending, current(prompt 摘要)}。</summary>
+    private static JsonObject TrimComfyQueue(JsonNode? q)
+    {
+        var o = new JsonObject();
+        var run = q?["queue_running"] as JsonArray;
+        var pend = q?["queue_pending"] as JsonArray;
+        o["running"] = run?.Count ?? 0;
+        o["pending"] = pend?.Count ?? 0;
+        if (run != null && run.Count > 0)
+        {
+            var cur = PromptExcerpt(run[0]);
+            if (cur != null) o["current"] = cur;
+        }
+        return o;
+    }
+
+    /// <summary>ComfyUI /history → 最近 8 条 {t, dur_s, status, prompt摘要, images}（按开始时间倒序）。</summary>
+    private static JsonArray TrimComfyHistory(JsonNode? h)
+    {
+        var arr = new JsonArray();
+        if (h is not JsonObject ho) return arr;
+        var list = new List<(long start, long end, string? pos, string status, int images)>();
+        foreach (var (_, e) in ho)
+        {
+            if (e is not JsonObject eo) continue;
+            long start = L(eo["execution_start"]) ?? L(eo["extras"]?["execution_start"]) ?? 0;
+            long end = L(eo["execution_success"]) ?? L(eo["execution_end"]) ?? L(eo["extras"]?["execution_success"]) ?? 0;
+            string status = eo["status"]?["status_str"]?.GetValue<string>()
+                            ?? (eo["status"]?["completed"]?.GetValue<bool>() == true ? "success" : "?");
+            int images = 0;
+            if (eo["outputs"] is JsonArray oa)
+                foreach (var op in oa.OfType<JsonObject>())
+                    images += (op["images"] as JsonArray)?.Count ?? 0;
+            list.Add((start, end, PromptExcerpt(eo["prompt"]), status, images));
+        }
+        foreach (var it in list.OrderByDescending(x => x.start).Take(8))
+        {
+            var o = new JsonObject
+            {
+                ["t"] = it.start / 1000.0,
+                ["status"] = it.status,
+                ["images"] = it.images,
+            };
+            if (it.end > it.start && it.start > 0) o["dur_s"] = Math.Round((it.end - it.start) / 1000.0, 1);
+            if (it.pos != null) o["prompt"] = it.pos;
+            arr.Add(o);
+        }
+        return arr;
+    }
+
+    /// <summary>从 ComfyUI prompt 结构（queue 条目或 history.prompt）里递归挖第一段 positive 文本，截 110 字符。</summary>
+    private static string? PromptExcerpt(JsonNode? p)
+    {
+        string? raw = FindPromptString(p, 0);
+        if (raw == null) return null;
+        raw = raw.Replace("\r", " ").Replace("\n", " ").Trim();
+        return raw.Length > 110 ? raw.Substring(0, 110) + "…" : raw;
+    }
+
+    private static string? FindPromptString(JsonNode? n, int depth)
+    {
+        if (n == null || depth > 6) return null;
+        if (n is JsonObject o)
+        {
+            if (o["positive"] is JsonArray pa && pa.Count > 0 && pa[0] is JsonValue)
+                return pa[0].GetValue<string>();
+            if (o["positive"] is JsonValue pv) return pv.GetValue<string>();
+            foreach (var (_, v) in o)
+            {
+                var r = FindPromptString(v, depth + 1);
+                if (r != null && r.Length > 3) return r;
+            }
+        }
+        else if (n is JsonArray a)
+            foreach (var v in a)
+            {
+                var r = FindPromptString(v, depth + 1);
+                if (r != null && r.Length > 3) return r;
+            }
+        return null;
+    }
+
+    private static long? L(JsonNode? n)
+    {
+        try { return n?.GetValue<long>(); }
+        catch { try { return (long?)n?.GetValue<double>(); } catch { return null; } }
     }
 
     /// <summary>ninfer /stats /props 结构未定型：只留两层内的标量，防快照爆炸。</summary>
