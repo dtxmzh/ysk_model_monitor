@@ -136,23 +136,124 @@ function gpuCard(g, procs) {
 /* prefill 实测坑：引擎 history.prefill_tok_s_mean 恒 0、live.prefill_tok_s_mean 仅 reading 瞬间非空。
    引擎自身口径 = prompt_read/prompt_ms（实际计算词元；reused 部分走对话缓存不计入）。
    前端对齐：当前值=live 值优先，否则 read/prompt_ms*1000（缺 read 回退全量）；曲线=前端按请求完成时刻自攒 */
-let prefillHist = [];
-let lastReqTime = 0;
+/* 公共主引擎卡设施（区域3 = 谁在跑显示谁）：各引擎曲线独立积累 */
+const ENGINE_KINDS = new Set(["strata", "ninfer"]);
+const engPrefill = {};   // id -> prefill 曲线（Strata 按请求完成时刻自攒；KVMem 直接用 5s 心跳数组）
+const engSeen = {};
 function reqPrefill(r) {
   if (!r) return null;
   const read = r.prompt_read ?? (r.reused != null ? Math.max(0, r.prompt_tokens - r.reused) : r.prompt_tokens);
   if (read && r.prompt_ms) return read / r.prompt_ms * 1000;
   return null;
 }
-function trackPrefill(r0) {
-  if (!r0 || !r0.time || r0.time === lastReqTime) return;
-  lastReqTime = r0.time;
+function trackPrefill(id, r0) {
+  if (!r0 || !r0.time || engSeen[id] === r0.time) return;
+  engSeen[id] = r0.time;
   const pf = reqPrefill(r0);
-  if (pf && isFinite(pf) && pf > 0) { prefillHist.push(Math.round(pf)); if (prefillHist.length > 300) prefillHist.shift(); }
+  if (pf && isFinite(pf) && pf > 0) { const a = engPrefill[id] ??= []; a.push(Math.round(pf)); if (a.length > 300) a.shift(); }
 }
 function prefillNow(live, r0) {
   if (live?.prefill_tok_s_mean > 0) return live.prefill_tok_s_mean;
   return reqPrefill(r0);
+}
+
+/* ---------------- L2 公共主引擎卡 ---------------- */
+/* 区域3 = 谁在跑显示谁：strata 走 /metrics 富 JSON；ninfer(KVMem) 走日志尾随 + /stats */
+function engineMainCard(s) { return s.kind === "ninfer" ? ninferCard(s) : strataCard(s); }
+
+function ninferCard(s) {
+  const card = el("div", "card strata-card open");
+  const lt = s.data?.logtail || {}, th = lt.throughput || [], reqs = lt.requests || [];
+  const stats = s.data?.stats || {}, props = s.data?.props || {};
+  const pick = (...vs) => { for (const v of vs) if (typeof v === "number" && isFinite(v)) return v; return null; };
+  const pathName = (p) => p ? String(p).split(/[\\/]/).pop() : null;
+  const lastTh = th[th.length - 1], lastReq = reqs[reqs.length - 1];
+  const fresh = !!lastTh && (snap.t / 1000 - lastTh.t) < 20;
+  const state = s.online ? ((fresh && lastTh.running > 0) ? "generating" : "idle") : null;
+  const badgeCls = { idle: "on", reading: "read", generating: "gen", queued: "queue", error: "err" };
+  let badges = ["idle", "generating", "queued", "error"].map(st =>
+    `<span class="badge ${st === state ? badgeCls[st] : "off"}">${st}</span>`).join("");
+
+  const model = stats.model || props.model || pathName(stats.model_path) || pathName(props.model_path) || DASH;
+  const engVer = stats.version || props.version || "ninfer";
+  const ctxTotal = pick(stats.context, stats.n_ctx, stats.max_context, stats.max_ctx,
+    props.n_ctx, props.context, props.max_context,
+    stats.kvmem?.context, props.kvmem?.context, props.kvmem?.budget_tokens);
+  const ctxCur = lastReq ? (lastReq.prompt || 0) + (lastReq.output || 0) : 0;
+
+  const dec = fresh ? lastTh.decode : (lastReq?.decode ?? null);
+  const pfl = fresh ? (lastTh.prefill ?? null) : (lastReq?.prefill ?? null);
+  const decHist = th.map(x => x.decode ?? 0), pfHist = th.map(x => x.prefill ?? 0);
+  const g = snap.gpus || [];
+  const gUtil = g.length ? g.reduce((a, x) => a + (x.util || 0), 0) / g.length : null;
+  const vUsed = g.reduce((a, x) => a + (x.memUsed || 0), 0), vTot = g.reduce((a, x) => a + (x.memTotal || 0), 0);
+  const temp = g.length ? Math.max(...g.map(x => x.temp || 0)) : null;
+  const pow = g.reduce((a, x) => a + (x.power || 0), 0);
+  const powLim = g.reduce((a, x) => a + (x.powerLimit || 0), 0);
+  const metrics = [
+    { ic: "speed", label: "Speed t/s", dual: true, v1: dec, v2: pfl, hist: sparkDualSVG(decHist, pfHist), sub: `decode · prefill${fresh ? "" : "（最近请求）"}` },
+    { ic: "cpu", label: "Host 占用 %", v: fresh ? lastTh.host : null, unit: "%", sub: `batch ${num(fresh ? lastTh.batch : null, 2)} · running ${fresh ? lastTh.running : 0}` },
+    { ic: "gpu", label: "GPU load %", v: gUtil, hist: sparkSVG(g[0]?.utilHist || []), sub: `${g.length} 卡合计均值` },
+    { ic: "vram", label: "VRAM GB", v: vTot ? vUsed / 1024 : null, vFmt: 1, unit: "GB", hist: sparkSVG(g[0]?.memHist || []), sub: `共 ${num(vTot / 1024, 1)} GB`, tone: vTot && vUsed / vTot > .9 ? "danger" : "" },
+    { ic: "temp", label: "GPU temp °C", v: temp, unit: "°C", hist: sparkSVG(g[0]?.tempHist || []), tone: temp > 85 ? "danger" : temp > 75 ? "warn" : "" },
+    { ic: "power", label: "Power W", v: pow, unit: "W", hist: sparkSVG(g[0]?.powerHist || []), sub: `上限 ${num(powLim, 0)} W` },
+    { ic: "cpu", label: "CPU %", v: snap.cpu, unit: "%", hist: sparkSVG(snap.cpuHist), sub: `${(snap.ramTotal && snap.ramAvail != null) ? "内存 " + num(bytes2gb(snap.ramTotal - snap.ramAvail), 1) + " / " + num(bytes2gb(snap.ramTotal), 1) + " GB" : ""}` },
+  ];
+  let prog = fresh ? `<div class="m-sub">推理中 running ${lastTh.running} · batch ${num(lastTh.batch, 2)} · host ${num(lastTh.host, 1)}%（5s 心跳）</div>` : "";
+
+  let tbl = "";
+  if (reqs.length) {
+    const shown = showAllReqs ? reqs : reqs.slice(-8).reverse();
+    tbl = `<div class="detail"><div class="detail-title">Recent requests（窗口内 ${reqs.length}${reqs.length > 8 ? (showAllReqs ? " · 全部" : " · 显示 8") : ""}
+      ${reqs.length > 8 ? `<button class="card-toggle" id="req-more" style="width:auto;padding:0 6px;color:var(--accent);font-size:11px">${showAllReqs ? "收起" : "Show all"}</button>` : ""}</div>
+      <div class="tbl-scroll"><table class="tbl"><thead><tr>
+        <th>时间</th><th class="num">时长s</th><th>结束</th><th class="num">Prompt</th><th class="num col-opt">Cached</th><th class="num">Output</th><th class="num">t/s</th><th class="num col-opt">Hit%</th><th class="num col-opt">TTFTms</th>
+      </tr></thead><tbody>` +
+      shown.map(r => `<tr>
+        <td>${hhmmss((r.t || 0) * 1000)}</td>
+        <td class="num">${num((r.dur_ms || 0) / 1000, 1)}</td>
+        <td>${esc(r.finish || DASH)}</td>
+        <td class="num">${r.prompt ?? DASH}</td>
+        <td class="num col-opt">${r.cached ?? DASH}</td>
+        <td class="num">${r.output ?? DASH}</td>
+        <td class="num">${num(r.decode, 1)}</td>
+        <td class="num col-opt">${r.hit_pct ?? DASH}</td>
+        <td class="num col-opt">${r.ttft_ms ?? DASH}</td>
+      </tr>`).join("") + `</tbody></table></div>
+      <div class="facts" style="margin-top:6px"><span>窗口内 <b>${reqs.length}</b> 请求</span><span>prompt <b>${reqs.reduce((a, r) => a + (r.prompt || 0), 0).toLocaleString()}</b></span><span>cached <b>${reqs.reduce((a, r) => a + (r.cached || 0), 0).toLocaleString()}</b></span><span>output <b>${reqs.reduce((a, r) => a + (r.output || 0), 0).toLocaleString()}</b></span><span>日志窗口 ≈ ${Math.max(th.length ? Math.round(((th[th.length - 1].t || 0) - (th[0].t || 0)) / 60) : 0, 1)} 分钟</span></div>
+    </div>`;
+  }
+
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-title">${esc(s.name)} <span style="color:var(--text-3);font-weight:400">:${portOf(s.url)}</span></span>
+      ${badges}<span class="head-spacer"></span>
+      ${s.lat != null ? `<span class="card-sub">${s.lat}ms</span>` : ""}
+    </div>
+    ${s.online ? `
+      <div class="kid" style="margin-top:6px"><span class="k-name">模型 <b style="color:var(--text)">${esc(model)}</b></span>
+        <span class="k-val">引擎 ${esc(engVer)} · ctx ${ctxTotal ? ctxTotal.toLocaleString() : DASH}</span></div>
+      ${prog}
+      ${ctxTotal ? `<div class="gauge-wrap">
+        ${gaugeSVG(ctxTotal ? ctxCur / ctxTotal * 100 : 0, "Context", `${ctxCur.toLocaleString()} / ${ctxTotal.toLocaleString()}`)}
+        <div style="flex:1;min-width:0">
+          <div class="m-sub">KV 分层驻留 Host（详见 ${esc(s.note || "KVMem")}）</div>
+          ${lastReq ? `<div class="m-sub">上请求 prompt ${lastReq.prompt ?? DASH} · output ${lastReq.output ?? DASH} · hit ${lastReq.hit_pct ?? DASH}%</div>` : ""}
+        </div>
+      </div>` : ""}
+      <div class="mgrid">${metrics.map(mt => `
+        <div class="metric"><div class="m-label">${IC[mt.ic]}${mt.label}</div>
+        <div class="m-value ${mt.dual ? "dual" : ""} ${mt.tone ? "tone-" + mt.tone : ""}">${mt.dual
+          ? `${num(mt.v1, 1)}<small>+</small><span class="alt">${num(mt.v2, 0)}</span><small>t/s</small></div>`
+          : `${mt.v == null ? DASH : (mt.vFmt != null ? Number(mt.v).toFixed(mt.vFmt) : Math.round(mt.v))}${mt.unit ? `<small>${mt.unit}</small>` : ""}</div>`}
+        ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist}</div>`).join("")}
+      </div>
+      ${tbl}` : `
+      <div class="m-sub" style="margin-top:6px">离线${s.lastOk ? ` · 最后在线 ${hhmmss(s.lastOk)}` : ""}</div>`}`;
+
+  const more = card.querySelector("#req-more");
+  if (more) more.addEventListener("click", (e) => { e.stopPropagation(); showAllReqs = !showAllReqs; render(); });
+  return card;
 }
 
 function strataCard(s) {
@@ -170,13 +271,13 @@ function strataCard(s) {
   const progPct = (live?.prompt_total && live?.prompt_read != null && live.state === "reading") ? live.prompt_read / live.prompt_total * 100 : null;
 
   const reqs0 = m?.requests?.[0];
-  trackPrefill(reqs0);
+  trackPrefill(s.id, reqs0);
   const pfNow = prefillNow(live, reqs0);
   const reusePct = (reqs0?.prompt_tokens && reqs0.reused != null) ? reqs0.reused / reqs0.prompt_tokens * 100 : null;
   const pfNote = reusePct != null && reusePct > 0.5 ? `（${reusePct.toFixed(1)}% 走缓存，仅算实算词元）` : "（实算词元）";
 
   const metrics = h ? [
-    { ic: "speed", label: "Speed t/s", dual: true, v1: live?.tok_s, v2: pfNow, hist: sparkDualSVG(h.tok_s, prefillHist), sub: `decode · prefill${pfNote}` },
+    { ic: "speed", label: "Speed t/s", dual: true, v1: live?.tok_s, v2: pfNow, hist: sparkDualSVG(h.tok_s, engPrefill[s.id] || []), sub: `decode · prefill${pfNote}` },
     { ic: "gpu", label: "GPU load %", v: hw?.gpu_util, hist: sparkSVG(h.gpu_util), sub: `${hw?.gpus?.length ?? DASH} 卡合计均值` },
     { ic: "vram", label: "VRAM GB", v: bytes2gb(hw?.gpu_mem_used), vFmt: 1, unit: "GB", hist: sparkSVG(h.gpu_mem_used), sub: `共 ${num(bytes2gb(hw?.gpu_mem_total), 1)} GB`, tone: hw?.gpu_mem_total && hw.gpu_mem_used / hw.gpu_mem_total > .9 ? "danger" : "" },
     { ic: "temp", label: "GPU temp °C", v: hw?.gpu_temp, unit: "°C", hist: sparkSVG(h.gpu_temp), tone: hw?.gpu_temp > 85 ? "danger" : hw?.gpu_temp > 75 ? "warn" : "" },
@@ -322,7 +423,7 @@ function genericBody(s) {
 }
 
 function serviceCard(s) {
-  if (s.kind === "strata") return strataCard(s);
+  if (ENGINE_KINDS.has(s.kind)) return engineMainCard(s);
   const card = el("div", "card svc-card" + (expanded.has(s.id) ? " open" : "") + (s.online ? "" : " offline"));
   const alias = s.data?.props?.model_alias || (s.kind === "tts" ? s.data?.health?.voice : null) ||
     (s.kind === "ollama" ? `${(s.data?.tags?.models || []).length} 模型` : null) ||
@@ -484,8 +585,16 @@ function render() {
   const order = snap.order || [];
   const svcs = [...snap.services];
   svcs.sort((a, b) => {
+    const ea = ENGINE_KINDS.has(a.kind), eb = ENGINE_KINDS.has(b.kind);
+    if (ea !== eb) return ea ? -1 : 1;                       // 公共主引擎卡恒占区域3首位
+    if (ea && eb) {                                          // 在线引擎排前（Strata 离线不占位）
+      if (a.online !== b.online) return a.online ? -1 : 1;
+      const ke = order.indexOf(a.id), kf = order.indexOf(b.id);
+      if (ke === kf) return 0;
+      if (ke === -1) return 1; if (kf === -1) return -1; return ke - kf;
+    }
     const ka = order.indexOf(a.id), kb = order.indexOf(b.id);
-    if (ka === -1 && kb === -1) return (a.kind === "strata" ? -1 : 1) - (b.kind === "strata" ? -1 : 1);
+    if (ka === -1 && kb === -1) return 0;
     if (ka === -1) return 1; if (kb === -1) return -1; return ka - kb;
   });
   if (!svcs.some(s => s.online)) {

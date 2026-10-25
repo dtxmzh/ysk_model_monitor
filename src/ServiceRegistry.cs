@@ -12,12 +12,14 @@ public sealed class ServiceDef
 {
     public string id = "";
     public string name = "";
-    public string kind = "generic";      // strata|llama|ollama|tts|asr|comfyui|generic
+    public string kind = "generic";      // strata|ninfer|llama|ollama|tts|asr|comfyui|generic
     public string base_url = "";
     public string health_path = "/health";
     public string? props_path;
     public string? slots_path;
     public string? metrics_path;
+    public string? stats_path;           // ninfer: /stats 原生吞吐与上下文统计
+    public string? log_path;             // ninfer: 引擎日志尾随解析（5s throughput + req done 行）
     public string pid_match = "";
     public bool enabled = true;
     public string note = "";
@@ -73,6 +75,8 @@ public sealed class ServiceRegistry
                 props_path = Str(n, "props_path"),
                 slots_path = Str(n, "slots_path"),
                 metrics_path = Str(n, "metrics_path"),
+                stats_path = Str(n, "stats_path"),
+                log_path = Str(n, "log_path"),
                 pid_match = Str(n, "pid_match") ?? "",
                 enabled = n["enabled"]?.GetValue<bool>() ?? true,
                 note = Str(n, "note") ?? "",
@@ -171,7 +175,7 @@ public sealed class ServiceRegistry
         Services.Add(d);
         File.WriteAllText(Path_, JsonSerializer.Serialize(Services.Select(s => new
         {
-            s.id, s.name, s.kind, s.base_url, s.health_path, s.props_path, s.slots_path, s.metrics_path, s.pid_match, s.enabled, s.note
+            s.id, s.name, s.kind, s.base_url, s.health_path, s.props_path, s.slots_path, s.metrics_path, s.stats_path, s.log_path, s.pid_match, s.enabled, s.note
         }).ToList(), new JsonSerializerOptions { WriteIndented = true }));
         Logger.Info("已固化发现服务: " + d.base_url);
     }

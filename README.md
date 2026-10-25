@@ -73,8 +73,12 @@ dotnet build src\ModelMonitor48.csproj -c Release
 编辑 `_data\services.json`（托盘菜单「监控对象 → 打开 services.json」），
 保存后托盘菜单「重载 services.json」立即生效，无需重启。
 
-条目字段：`{name, kind, base_url, health_path, props_path, slots_path, metrics_path, pid_match, enabled, note}`
-`kind` ∈ `strata | llama | ollama | tts | asr | comfyui | generic`（generic 只探活）。
+条目字段：`{id, name, kind, base_url, health_path, props_path, slots_path, metrics_path, stats_path, log_path, pid_match, enabled, note}`
+`kind` ∈ `strata | ninfer | llama | ollama | tts | asr | comfyui | generic`（generic 只探活）。
+`ninfer`（NInfer/KVMem 类引擎）：探活 `/health` + 采 `/stats` `/props` + 尾随 `log_path` 引擎日志
+（5s throughput 行 + req done 行），渲染成与 Strata 同款的公共主引擎卡（prefill/decode 双曲线、
+上下文表盘、最近请求表）；`log_path` 缺省时卡片只有 HTTP 部分。`strata`/`ninfer` 都占用列表首位的
+主引擎卡位置，谁在线谁显示。
 
 ## 设置清单（托盘右键 与 悬浮窗右键 完全一致）
 

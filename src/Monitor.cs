@@ -65,6 +65,7 @@ public sealed class Monitor
         public bool Busy;
         public JsonObject? PropsCache, TagsCache;
         public long PropsDue, TagsDue;
+        public LogTail.Bag? LogBag;      // ninfer: 日志尾随状态
     }
     public Dictionary<string, SvcState> SvcStates { get; } = new();
 
@@ -211,7 +212,7 @@ public sealed class Monitor
 
     private static int IntervalFor(ServiceDef def, int baseS) => def.kind switch
     {
-        "strata" or "llama" or "ollama" => Derived(baseS, 1),
+        "strata" or "ninfer" or "llama" or "ollama" => Derived(baseS, 1),
         _ => Derived(baseS, 2),
     };
 
@@ -251,6 +252,24 @@ public sealed class Monitor
                     data["health"] = await GetJson(def.base_url + def.health_path, to);
                     if (def.metrics_path != null)
                         data["metrics"] = await GetJson(def.base_url + def.metrics_path, to);
+                    break;
+                case "ninfer":
+                    // KVMem(NInfer)：HTTP 三样 + 日志尾随（throughput/req done 行）
+                    data["health"] = await GetJson(def.base_url + def.health_path, to);
+                    if (def.stats_path != null)
+                        data["stats"] = TrimStats(await GetJson(def.base_url + def.stats_path, to));
+                    if (def.props_path != null && (st.PropsDue == 0 || now >= st.PropsDue))
+                    {
+                        st.PropsCache = TrimStats(await GetJson(def.base_url + def.props_path, to));
+                        st.PropsDue = now + Derived(baseS, 5) * 1000L;
+                    }
+                    if (st.PropsCache != null) data["props"] = st.PropsCache.DeepClone();
+                    if (!string.IsNullOrEmpty(def.log_path))
+                    {
+                        st.LogBag ??= new LogTail.Bag();
+                        LogTail.Update(st.LogBag, def.log_path!);
+                        data["logtail"] = LogTail.Snapshot(st.LogBag);
+                    }
                     break;
                 case "llama":
                     await GetJson(def.base_url + def.health_path, to);
@@ -356,6 +375,31 @@ public sealed class Monitor
                 arr.Add(mo);
             }
             o["devices"] = arr;
+        }
+        return o;
+    }
+
+    /// <summary>ninfer /stats /props 结构未定型：只留两层内的标量，防快照爆炸。</summary>
+    private static JsonObject TrimStats(JsonNode? s)
+    {
+        var o = new JsonObject();
+        if (s is not JsonObject so) return o;
+        foreach (var (k, v) in so)
+        {
+            if (v is JsonObject vo)
+            {
+                var inner = new JsonObject();
+                int cnt = 0;
+                foreach (var (k2, v2) in vo)
+                {
+                    if (v2 is JsonObject || v2 is JsonArray) continue;
+                    inner[k2] = v2?.DeepClone();
+                    if (++cnt >= 30) break;
+                }
+                if (cnt > 0) o[k] = inner;
+            }
+            else if (v is not JsonArray)
+                o[k] = v?.DeepClone();
         }
         return o;
     }
