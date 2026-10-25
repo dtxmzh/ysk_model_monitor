@@ -177,8 +177,10 @@ function ninferCard(s) {
   const model = stats.model || props.model || pathName(stats.model_path) || pathName(props.model_path) || DASH;
   const engVer = stats.version || props.version || "ninfer";
   const ctxTotal = pick(stats.context, stats.n_ctx, stats.max_context, stats.max_ctx,
-    props.n_ctx, props.context, props.max_context,
-    stats.kvmem?.context, props.kvmem?.context, props.kvmem?.budget_tokens);
+    stats.engine?.context, stats.engine?.n_ctx, stats.engine?.max_context, stats.model?.n_ctx,
+    props.n_ctx, props.context, props.max_context, props.engine?.n_ctx, props.model?.n_ctx,
+    stats.kvmem?.context, props.kvmem?.context, props.kvmem?.budget_tokens,
+    stats.usage?.context, stats.memory?.context);
   const ctxCur = lastReq ? (lastReq.prompt || 0) + (lastReq.output || 0) : 0;
 
   const dec = fresh ? lastTh.decode : (lastReq?.decode ?? null);
@@ -246,13 +248,71 @@ function ninferCard(s) {
         <div class="m-value ${mt.dual ? "dual" : ""} ${mt.tone ? "tone-" + mt.tone : ""}">${mt.dual
           ? `${num(mt.v1, 1)}<small>+</small><span class="alt">${num(mt.v2, 0)}</span><small>t/s</small></div>`
           : `${mt.v == null ? DASH : (mt.vFmt != null ? Number(mt.v).toFixed(mt.vFmt) : Math.round(mt.v))}${mt.unit ? `<small>${mt.unit}</small>` : ""}</div>`}
-        ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist}</div>`).join("")}
+        ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist || ""}</div>`).join("")}
       </div>
       ${tbl}` : `
       <div class="m-sub" style="margin-top:6px">离线${s.lastOk ? ` · 最后在线 ${hhmmss(s.lastOk)}` : ""}</div>`}`;
 
   const more = card.querySelector("#req-more");
   if (more) more.addEventListener("click", (e) => { e.stopPropagation(); showAllReqs = !showAllReqs; render(); });
+  return card;
+}
+
+/* ---------------- 创作平台主卡 (ComfyUI) ---------------- */
+/* 无词元速度概念，显示生成分指标：显存仪表、队列、当前任务摘要、最近任务用时表 */
+function comfyMainCard(s) {
+  const card = el("div", "card strata-card open");
+  const dev = (s.data?.health?.devices || [])[0] || {};
+  const q = s.data?.queue || {}, hist = s.data?.history || [];
+  const done = hist.filter(h => h.dur_s != null);
+  const avg = done.length ? done.reduce((a, h) => a + h.dur_s, 0) / done.length : null;
+  const vTot = bytes2gb(dev.vram_total), vFree = bytes2gb(dev.vram_free);
+  const tvTot = bytes2gb(dev.torch_vram_total), tvFree = bytes2gb(dev.torch_vram_free);
+  const tvUse = tvTot != null && tvFree != null ? tvTot - tvFree : null;
+  const state = (q.running > 0) ? "generating" : (q.pending > 0 ? "queued" : "idle");
+  const badgeCls = { idle: "on", generating: "gen", queued: "queue", error: "err" };
+  let badges = ["idle", "generating", "queued"].map(st =>
+    `<span class="badge ${st === state ? badgeCls[st] : "off"}">${st}</span>`).join("");
+  const metrics = [
+    { ic: "speed", label: "平均出图 s", v: avg, sub: `窗口内 ${done.length} 任务` },
+    { ic: "grip", label: "排队", v: q.pending ?? null, sub: `执行中 ${q.running ?? 0}${avg && q.pending ? ` · 预计等 ${Math.round(avg * q.pending)}s` : ""}` },
+    { ic: "vram", label: "显存 GB", v: tvUse, vFmt: 1, unit: "GB", sub: `torch 已用 / 共 ${num(vTot, 1)} GB`, tone: vTot && tvUse != null && tvUse / vTot > .9 ? "danger" : "" },
+    { ic: "gpu", label: "GPU 空闲 GB", v: vFree, vFmt: 1, unit: "GB", sub: esc(dev.name || DASH) },
+  ];
+  const cur = q.current ? `<div class="m-sub" style="margin-top:6px">执行中: ${esc(q.current)}</div>` : "";
+  let tbl = "";
+  if (hist.length) {
+    tbl = `<div class="detail"><div class="detail-title">Recent 任务（窗口内 ${hist.length}）</div>
+      <div class="tbl-scroll"><table class="tbl"><thead><tr>
+        <th>时间</th><th class="num">用时s</th><th>状态</th><th class="num">图</th><th>Prompt</th>
+      </tr></thead><tbody>` +
+      hist.map(h => `<tr>
+        <td>${hhmmss((h.t || 0) * 1000)}</td>
+        <td class="num">${num(h.dur_s, 1)}</td>
+        <td>${esc(h.status || DASH)}</td>
+        <td class="num">${h.images ?? DASH}</td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(h.prompt || "")}">${esc(h.prompt || DASH)}</td>
+      </tr>`).join("") + `</tbody></table></div></div>`;
+  }
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-title">${esc(s.name)} <span style="color:var(--text-3);font-weight:400">:${portOf(s.url)}</span></span>
+      ${badges}<span class="head-spacer"></span>
+      ${s.lat != null ? `<span class="card-sub">${s.lat}ms</span>` : ""}
+    </div>
+    <div class="kid" style="margin-top:6px"><span class="k-name">ComfyUI <b style="color:var(--text)">${esc(s.data?.health?.comfyui_version || DASH)}</b></span>
+      <span class="k-val">${esc(s.data?.health?.os || "")} · python ${esc(s.data?.health?.python_version || DASH)}</span></div>
+    ${cur}
+    ${vTot && tvUse != null ? `<div class="gauge-wrap">
+      ${gaugeSVG(tvUse / vTot * 100, "VRAM", `${num(tvUse, 1)} / ${num(vTot, 1)} GB`)}
+      <div style="flex:1;min-width:0"><div class="m-sub">${q.running > 0 ? "出图/视频任务执行中" : (q.pending > 0 ? `队列排队 ${q.pending} 个` : "空闲待机, 随时可投任务")}</div></div>
+    </div>` : ""}
+    <div class="mgrid">${metrics.map(mt => `
+      <div class="metric"><div class="m-label">${IC[mt.ic]}${mt.label}</div>
+      <div class="m-value ${mt.tone ? "tone-" + mt.tone : ""}">${mt.v == null || isNaN(mt.v) ? DASH : (mt.vFmt != null ? Number(mt.v).toFixed(mt.vFmt) : Math.round(mt.v))}${mt.unit ? `<small>${mt.unit}</small>` : ""}</div>
+      ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist || ""}</div>`).join("")}
+    </div>
+    ${tbl}`;
   return card;
 }
 
@@ -352,7 +412,7 @@ function strataCard(s) {
         <div class="m-value ${mt.dual ? "dual" : ""} ${mt.tone ? "tone-" + mt.tone : ""}">${mt.dual
           ? `${num(mt.v1, 1)}<small>+</small><span class="alt">${num(mt.v2, 0)}</span><small>t/s</small></div>`
           : `${mt.v == null ? DASH : (mt.vFmt != null ? Number(mt.v).toFixed(mt.vFmt) : Math.round(mt.v))}${mt.unit ? `<small>${mt.unit}</small>` : ""}</div>`}
-        ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist}</div>`).join("")}
+        ${mt.sub ? `<div class="m-sub">${esc(mt.sub)}</div>` : ""}${mt.hist || ""}</div>`).join("")}
       </div>
       ${ccHtml}${tbl}` : `
       <div class="m-sub" style="margin-top:6px">离线${s.lastOk ? ` · 最后在线 ${hhmmss(s.lastOk)}` : ""}</div>`}`;
@@ -424,6 +484,7 @@ function genericBody(s) {
 
 function serviceCard(s) {
   if (ENGINE_KINDS.has(s.kind)) return engineMainCard(s);
+  if (s.kind === "comfyui" && s.online) return comfyMainCard(s);
   const card = el("div", "card svc-card" + (expanded.has(s.id) ? " open" : "") + (s.online ? "" : " offline"));
   const alias = s.data?.props?.model_alias || (s.kind === "tts" ? s.data?.health?.voice : null) ||
     (s.kind === "ollama" ? `${(s.data?.tags?.models || []).length} 模型` : null) ||
@@ -587,6 +648,8 @@ function render() {
   svcs.sort((a, b) => {
     const ea = ENGINE_KINDS.has(a.kind), eb = ENGINE_KINDS.has(b.kind);
     if (ea !== eb) return ea ? -1 : 1;                       // 公共主引擎卡恒占区域3首位
+    const ca = a.kind === "comfyui" && a.online, cb = b.kind === "comfyui" && b.online;
+    if (ca !== cb) return ca ? -1 : 1;                       // 在线 ComfyUI 主卡紧随引擎
     if (ea && eb) {                                          // 在线引擎排前（Strata 离线不占位）
       if (a.online !== b.online) return a.online ? -1 : 1;
       const ke = order.indexOf(a.id), kf = order.indexOf(b.id);
