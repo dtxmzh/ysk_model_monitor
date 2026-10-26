@@ -199,7 +199,8 @@ function ninferCard(s) {
     { ic: "vram", label: "VRAM GB", v: vTot ? vUsed / 1024 : null, vFmt: 1, unit: "GB", hist: sparkSVG(g[0]?.memHist || []), sub: `共 ${num(vTot / 1024, 1)} GB`, tone: vTot && vUsed / vTot > .9 ? "danger" : "" },
     { ic: "temp", label: "GPU temp °C", v: temp, unit: "°C", hist: sparkSVG(g[0]?.tempHist || []), tone: temp > 85 ? "danger" : temp > 75 ? "warn" : "" },
     { ic: "power", label: "Power W", v: pow, unit: "W", hist: sparkSVG(g[0]?.powerHist || []), sub: `上限 ${num(powLim, 0)} W` },
-    { ic: "cpu", label: "CPU %", v: snap.cpu, unit: "%", hist: sparkSVG(snap.cpuHist), sub: `${(snap.ramTotal && snap.ramAvail != null) ? "内存 " + num(bytes2gb(snap.ramTotal - snap.ramAvail), 1) + " / " + num(bytes2gb(snap.ramTotal), 1) + " GB" : ""}` },
+    { ic: "cpu", label: "CPU %", v: snap.cpu, unit: "%", hist: sparkSVG(snap.cpuHist), sub: "任务管理器同源(PDH)" },
+    { ic: "vram", label: "内存 %", v: (snap.ramTotal && snap.ramAvail != null) ? Math.round(1000 * (snap.ramTotal - snap.ramAvail) / snap.ramTotal) / 10 : null, vFmt: 1, unit: "%", hist: sparkSVG(snap.ramHist || []), sub: (snap.ramTotal && snap.ramAvail != null) ? num(bytes2gb(snap.ramTotal - snap.ramAvail), 1) + " / " + num(bytes2gb(snap.ramTotal), 1) + " GB" : "", tone: snap.ramTotal && snap.ramAvail != null && (snap.ramTotal - snap.ramAvail) / snap.ramTotal > .9 ? "danger" : "" },
   ];
   let prog = fresh ? `<div class="m-sub">推理中 running ${lastTh.running} · batch ${num(lastTh.batch, 2)} · host ${num(lastTh.host, 1)}%（5s 心跳）</div>` : "";
 
@@ -276,8 +277,8 @@ function comfyMainCard(s) {
   const metrics = [
     { ic: "speed", label: "平均出图 s", v: avg, sub: `窗口内 ${done.length} 任务` },
     { ic: "grip", label: "排队", v: q.pending ?? null, sub: `执行中 ${q.running ?? 0}${avg && q.pending ? ` · 预计等 ${Math.round(avg * q.pending)}s` : ""}` },
-    { ic: "vram", label: "显存 GB", v: tvUse, vFmt: 1, unit: "GB", sub: `torch 已用 / 共 ${num(vTot, 1)} GB`, tone: vTot && tvUse != null && tvUse / vTot > .9 ? "danger" : "" },
-    { ic: "gpu", label: "GPU 空闲 GB", v: vFree, vFmt: 1, unit: "GB", sub: esc(dev.name || DASH) },
+    { ic: "vram", label: dev.type === "cpu" ? "模式" : "显存 GB", v: dev.type === "cpu" ? null : tvUse, vFmt: 1, unit: dev.type === "cpu" ? undefined : "GB", sub: dev.type === "cpu" ? "CPU 模式 (Strata 占卡期, 功能全但慢)" : `torch 已用 / 共 ${num(vTot, 1)} GB`, tone: dev.type !== "cpu" && vTot && tvUse != null && tvUse / vTot > .9 ? "danger" : "" },
+    { ic: "gpu", label: dev.type === "cpu" ? "设备" : "GPU 空闲 GB", v: dev.type === "cpu" ? null : vFree, vFmt: 1, unit: dev.type === "cpu" ? undefined : "GB", sub: esc(dev.name || DASH) },
   ];
   const cur = q.current ? `<div class="m-sub" style="margin-top:6px">执行中: ${esc(q.current)}</div>` : "";
   let tbl = "";
@@ -343,7 +344,8 @@ function strataCard(s) {
     { ic: "temp", label: "GPU temp °C", v: hw?.gpu_temp, unit: "°C", hist: sparkSVG(h.gpu_temp), tone: hw?.gpu_temp > 85 ? "danger" : hw?.gpu_temp > 75 ? "warn" : "" },
     { ic: "power", label: "Power W", v: hw?.gpu_power, unit: "W", hist: sparkSVG(h.gpu_power), sub: `上限 ${num(hw?.gpu_power_limit, 0)} W` },
     { ic: "pcie", label: "PCIe MB/s", v: hw?.gpu_pcie_rx_mb, vFmt: 2, unit: "MB/s", hist: sparkSVG(h.gpu_pcie_rx_mb), tone: "info", sub: `gen ${hw?.gpu_pcie_gen ?? DASH} ×${hw?.gpu_pcie_width ?? DASH}` },
-    { ic: "cpu", label: "CPU %", v: snap.cpu, unit: "%", hist: sparkSVG(snap.cpuHist), sub: `${(snap.ramTotal && snap.ramAvail != null) ? "内存 " + num(bytes2gb(snap.ramTotal - snap.ramAvail), 1) + " / " + num(bytes2gb(snap.ramTotal), 1) + " GB" : ""}` },
+    { ic: "cpu", label: "CPU %", v: snap.cpu, unit: "%", hist: sparkSVG(snap.cpuHist), sub: "任务管理器同源(PDH)" },
+    { ic: "vram", label: "内存 %", v: (snap.ramTotal && snap.ramAvail != null) ? Math.round(1000 * (snap.ramTotal - snap.ramAvail) / snap.ramTotal) / 10 : null, vFmt: 1, unit: "%", hist: sparkSVG(snap.ramHist || []), sub: (snap.ramTotal && snap.ramAvail != null) ? num(bytes2gb(snap.ramTotal - snap.ramAvail), 1) + " / " + num(bytes2gb(snap.ramTotal), 1) + " GB" : "", tone: snap.ramTotal && snap.ramAvail != null && (snap.ramTotal - snap.ramAvail) / snap.ramTotal > .9 ? "danger" : "" },
     { ic: "disk", label: "Disk read MB/s", v: hw?.disk_read_mb, vFmt: 2, unit: "MB/s", hist: sparkSVG(h.disk_read_mb), tone: "info" },
   ] : [];
 

@@ -84,6 +84,10 @@ public sealed class Monitor
     private ulong _prevIdle, _prevKernel, _prevUser, _prevTotal;
     public double CpuUtil; public (ulong total, ulong avail) Ram = (0, 0);
     public readonly List<double> CpuHist = new();
+    public readonly List<double> RamHist = new();
+#if NETFRAMEWORK
+    private System.Diagnostics.PerformanceCounter _pcCpu; private bool _pcWarm, _pcDead;
+#endif
 
     // ---- 调度 ----
     private readonly Dictionary<string, long> _taskDue = new();
@@ -117,7 +121,43 @@ public sealed class Monitor
     }
 
     public void SetWindowVisible(bool visible) { _windowVisible = visible; }
-    public void Start() { _cts = new CancellationTokenSource(); _ = RunLoop(_cts.Token); }
+    public void Start() { _cts = new CancellationTokenSource(); StartHttpApi(_cts.Token); _ = RunLoop(_cts.Token); }
+
+    // 18080 调试接口: 任意 GET 请求返回快照 JSON (供自动化校验; bind 失败静默跳过, 不影响主功能)
+    private void StartHttpApi(CancellationToken ct)
+    {
+        var t = new System.Threading.Thread(() =>
+        {
+            try
+            {
+                var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 18080);
+                listener.Start();
+                while (!ct.IsCancellationRequested)
+                {
+                    if (!listener.Pending()) { Thread.Sleep(200); continue; }
+                    try
+                    {
+                        using (var client = listener.AcceptTcpClient())
+                        using (var net = client.GetStream())
+                        {
+                            var buf = new byte[2048];
+                            try { net.Read(buf, 0, buf.Length); } catch { }
+                            var body = System.Text.Encoding.UTF8.GetBytes(BuildSnapshot().ToJsonString(SnapOpts));
+                            var head = System.Text.Encoding.ASCII.GetBytes(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
+                            net.Write(head, 0, head.Length);
+                            net.Write(body, 0, body.Length);
+                            net.Flush();
+                        }
+                    }
+                    catch { }
+                }
+                listener.Stop();
+            }
+            catch (Exception e) { Logger.Info("18080 调试接口未起: " + e.Message); }
+        }) { IsBackground = true, Name = "ysk-http" };
+        t.Start();
+    }
     public void Stop() { _cts?.Cancel(); }
 
     /// <summary>services.json 重载后补建状态。</summary>
@@ -648,17 +688,33 @@ public sealed class Monitor
     {
         try
         {
-            if (!Native.GetSystemTimes(out var idle, out var kernel, out var user)) return;
-            ulong i = Native.ToU64(idle), k = Native.ToU64(kernel), u = Native.ToU64(user);
-            if (_prevTotal > 0)
+            // 首选 PerformanceCounter（与任务管理器同源，仅 .NET Framework 稳定）；其余运行时回退 GetSystemTimes 差值公式
+            bool got = false;
+#if NETFRAMEWORK
+            if (!_pcDead)
             {
-                ulong totalDelta = (k - _prevKernel) + (u - _prevUser);
-                if (totalDelta > 0) CpuUtil = Math.Round(100.0 * (totalDelta - (i - _prevIdle)) / totalDelta, 1);
+                try
+                {
+                    if (_pcCpu == null) { _pcCpu = new System.Diagnostics.PerformanceCounter("Processor", "% Processor Time", "_Total"); _pcCpu.NextValue(); _pcWarm = false; }
+                    else { var raw = _pcCpu.NextValue(); if (_pcWarm && !double.IsNaN(raw) && raw >= 0) { CpuUtil = Math.Round(raw, 1); got = true; } else _pcWarm = true; }
+                }
+                catch { _pcDead = true; _pcCpu = null; }
             }
-            _prevIdle = i; _prevKernel = k; _prevUser = u;
-            _prevTotal = 1;
+#endif
+            if (!got && Native.GetSystemTimes(out var idle, out var kernel, out var user))
+            {
+                ulong i = Native.ToU64(idle), k = Native.ToU64(kernel), u = Native.ToU64(user);
+                if (_prevTotal > 0)
+                {
+                    ulong totalDelta = (k - _prevKernel) + (u - _prevUser);
+                    if (totalDelta > 0) CpuUtil = Math.Round(100.0 * (totalDelta - (i - _prevIdle)) / totalDelta, 1);
+                }
+                _prevIdle = i; _prevKernel = k; _prevUser = u;
+                _prevTotal = 1;
+            }
             CpuHist.Add(CpuUtil); Cap(CpuHist);
             Ram = Native.Memory();
+            RamHist.Add(Ram.total > 0 ? Math.Round(100.0 * (Ram.total - Ram.avail) / Ram.total, 1) : 0); Cap(RamHist);
         }
         catch { }
     }
@@ -710,6 +766,7 @@ public sealed class Monitor
             ["cpuHist"] = Arr(CpuHist),
             ["ramTotal"] = (double)Ram.total,
             ["ramAvail"] = (double)Ram.avail,
+            ["ramHist"] = Arr(RamHist),
         };
 
         var gpus = new JsonArray();

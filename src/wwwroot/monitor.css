@@ -136,8 +136,8 @@ body.resizing #frame { border-color: rgba(91,108,249,.38); }
 /* 从属缩进：缩进 + 左竖线，不套边框 */
 .kids { margin: 8px 0 0 6px; padding-left: 12px; border-left: 2px solid var(--card-border); display: flex; flex-direction: column; gap: 4px; }
 .kid { display: flex; align-items: baseline; gap: 8px; font-size: var(--fs-sub); color: var(--text-2); min-width: 0; }
-.kid .k-name { flex: 1; color: var(--text); word-break: break-all; }
-.kid .k-val { font-family: var(--mono); font-size: var(--fs-sub); white-space: nowrap; margin-left: auto; }
+.kid .k-name { flex: 1; color: var(--text); word-break: normal; overflow-wrap: anywhere; min-width: 0; }
+.kid .k-val { font-family: var(--mono); font-size: var(--fs-sub); white-space: nowrap; margin-left: auto; max-width: 62%; overflow: hidden; text-overflow: ellipsis; }
 .kid .k-xref { font-size: 11px; color: var(--text-3); white-space: nowrap; }
 .kid.dim .k-name { color: var(--text-3); }
 
